@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gather: plan a get-together</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar"></div>
+<main>
+  <div id="banner"></div>
+
+  <section id="create">
+    <div class="hero">
+      <span class="eyebrow" id="eyebrow"></span>
+      <h1>Find a time that works, without the poll.</h1>
+      <p class="lead">Share one link. Everyone says, in their own words, when they're free and what they'd enjoy. AI turns the replies into a plan you can send.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step"><span class="num">1</span><b>Create the event</b><span>Dates, time window, what to ask</span></div>
+      <div class="step"><span class="num">2</span><b>Share the link</b><span>People reply like they're texting</span></div>
+      <div class="step"><span class="num">3</span><b>Get a plan</b><span>Best times + details + a message to post</span></div>
+    </div>
+
+    <form class="card" id="form" novalidate>
+      <div class="section-title"><span class="icon-badge" id="ic1"></span><h2>The basics</h2></div>
+
+      <label for="title">What's the occasion?</label>
+      <input id="title" required maxlength="120" placeholder="Lab happy hour" />
+
+      <label for="description">Details <span class="hint">· optional</span></label>
+      <textarea id="description" maxlength="1000" placeholder="End-of-semester drinks + food near campus, ~10 people" style="min-height:76px"></textarea>
+
+      <span class="label">Besides time, ask people about <span class="hint">· optional</span></span>
+      <div class="chips" id="askChips"></div>
+      <input id="askOther" maxlength="200" placeholder="Anything else? e.g. location, activity ideas" style="margin-top:10px" />
+
+      <div class="divider"></div>
+      <div class="section-title"><span class="icon-badge violet" id="ic2"></span><h2>When could it happen?</h2></div>
+
+      <div class="row">
+        <div><label for="dateStart">Earliest date</label><input type="date" id="dateStart" required /></div>
+        <div><label for="dateEnd">Latest date</label><input type="date" id="dateEnd" required /></div>
+      </div>
+      <div class="row">
+        <div><label for="dayStart">Each day, from</label><input type="time" id="dayStart" value="17:00" step="1800" required /></div>
+        <div><label for="dayEnd">until</label><input type="time" id="dayEnd" value="23:00" step="1800" required /></div>
+      </div>
+
+      <span class="label">How long?</span>
+      <div class="segmented" id="duration"></div>
+
+      <p class="small muted" id="tzNote" style="margin:16px 0 0"></p>
+      <div class="actions">
+        <button type="submit" id="submit" class="lg">Create event <span id="arrow"></span></button>
+      </div>
+      <div class="error" id="error"></div>
+    </form>
+  </section>
+
+  <section id="done" hidden>
+    <div class="card success">
+      <div class="big-icon" id="doneIcon"></div>
+      <h1 style="font-size:34px">You're all set</h1>
+      <p class="muted" style="margin:0 auto;max-width:440px">Post the participant link in your group chat. Keep the organizer link to yourself: it shows everyone's answers.</p>
+
+      <div class="linkfield">
+        <span class="label">Participant link</span>
+        <div class="linkbox"><input id="shareLink" readonly /><button id="copyShare">Copy</button></div>
+      </div>
+      <div class="linkfield">
+        <span class="label">Organizer link <span class="hint">· private</span></span>
+        <div class="linkbox"><input id="adminLink" readonly /><button id="copyAdmin" class="secondary">Copy</button></div>
+      </div>
+      <div class="actions" style="justify-content:center;margin-top:28px">
+        <a id="openAdmin" class="btn">Open organizer dashboard</a>
+        <a id="openShare" class="btn secondary" target="_blank">Preview as participant</a>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import { api, showDemoBanner, copyButton, icons, topbar, myGatherLink } from "/common.js";
+  const $ = (id) => document.getElementById(id);
+
+  $("topbar").innerHTML = topbar(myGatherLink());
+  showDemoBanner($("banner"));
+  $("eyebrow").innerHTML = `${icons.sparkle} Group planning, minus the back-and-forth`;
+  $("ic1").innerHTML = icons.sparkle;
+  $("ic2").innerHTML = icons.calendar;
+  $("arrow").outerHTML = icons.send;
+  $("doneIcon").innerHTML = icons.check;
+
+  const ASK = ["Food preferences", "Budget", "Dietary restrictions", "Drinks", "Location", "Activity ideas"];
+  $("askChips").innerHTML = ASK.map((a, i) => `<button type="button" class="chip" aria-pressed="${i < 3}">${a}</button>`).join("");
+  $("askChips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (chip) chip.setAttribute("aria-pressed", chip.getAttribute("aria-pressed") !== "true");
+  });
+
+  const DURATIONS = [[30, "30 min"], [60, "1 hr"], [90, "1.5 hr"], [120, "2 hr"], [180, "3 hr"], [240, "4 hr"]];
+  $("duration").innerHTML = DURATIONS.map(([v, l]) =>
+    `<input type="radio" name="duration" id="d${v}" value="${v}" ${v === 120 ? "checked" : ""}><label for="d${v}">${l}</label>`).join("");
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $("tzNote").textContent = `Times are in your time zone (${tz}).`;
+  const iso = (d) => d.toLocaleDateString("en-CA");
+  const today = new Date();
+  $("dateStart").value = iso(new Date(today.getTime() + 86400000));
+  $("dateEnd").value = iso(new Date(today.getTime() + 7 * 86400000));
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("error").textContent = "";
+    if (!$("title").value.trim()) { $("error").textContent = "Give your event a name."; $("title").focus(); return; }
+    const askAbout = [...$("askChips").querySelectorAll('[aria-pressed="true"]')].map((c) => c.textContent)
+      .concat($("askOther").value.trim() ? [$("askOther").value.trim()] : []).join(", ");
+    $("submit").disabled = true;
+    try {
+      const { id, adminKey } = await api("/api/events", {
+        method: "POST",
+        body: {
+          title: $("title").value, description: $("description").value, askAbout,
+          dateStart: $("dateStart").value, dateEnd: $("dateEnd").value,
+          dayStart: $("dayStart").value, dayEnd: $("dayEnd").value,
+          durationMinutes: Number(document.querySelector('input[name="duration"]:checked').value), timeZone: tz,
+        },
+      });
+      const share = `${location.origin}/e/${id}`;
+      const admin = `${location.origin}/e/${id}/admin?key=${adminKey}`;
+      $("shareLink").value = share;
+      $("adminLink").value = admin;
+      $("openAdmin").href = admin;
+      $("openShare").href = share;
+      $("create").hidden = true;
+      $("done").hidden = false;
+      window.scrollTo({ top: 0 });
+    } catch (err) {
+      $("error").textContent = err.message;
+    } finally {
+      $("submit").disabled = false;
+    }
+  });
+  copyButton($("copyShare"), () => $("shareLink").value, "Participant link copied");
+  copyButton($("copyAdmin"), () => $("adminLink").value, "Organizer link copied");
+</script>
+</body>
+</html>

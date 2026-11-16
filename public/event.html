@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gather: share your availability</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar"></div>
+<main>
+  <div id="banner"></div>
+  <div class="error" id="loadError"></div>
+
+  <section id="intro" class="event-head" hidden>
+    <span class="eyebrow" id="eyebrow"></span>
+    <h1 id="title"></h1>
+    <p class="event-desc" id="desc"></p>
+    <div class="meta-row" id="meta"></div>
+  </section>
+
+  <div id="decided" style="margin-top:24px"></div>
+  <div id="welcome"></div>
+
+  <section id="compose" hidden style="margin-top:24px">
+    <div class="card chat-card">
+      <div class="name-row">
+        <label for="name">Your name</label>
+        <input id="name" maxlength="60" placeholder="e.g. Alice" autocomplete="given-name" />
+      </div>
+
+      <div class="chat" id="chat" aria-live="polite"></div>
+
+      <div class="suggestions" id="suggestions">
+        <div class="small muted">Not sure what to say? Tap one to start:</div>
+        <div class="chips" id="suggestionChips"></div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-box">
+          <textarea id="message" aria-label="Your reply" placeholder="Type like you would in a group chat…"></textarea>
+          <button id="send" class="send-btn" aria-label="Send"></button>
+        </div>
+        <div class="hint"><span>Any language works. Mention times, food, budget, allergies, "might be late"…</span><span class="kbd-hint"><kbd>⌘</kbd> + <kbd>Enter</kbd> to send</span></div>
+        <div class="error" id="error"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="confirm" hidden>
+    <div class="card confirm-card">
+      <div class="section-title"><span class="icon-badge" id="icConfirm"></span><h2>Here's what I understood</h2></div>
+      <p class="quote" id="summary"></p>
+
+      <div class="card-head" style="margin:0 0 10px">
+        <h3 style="margin:0">When you can come</h3>
+        <button id="editTimes" type="button" class="secondary mini-btn">Adjust times</button>
+      </div>
+      <div id="timesView">
+        <div class="timeline" id="timeline"></div>
+        <div id="legend"></div>
+      </div>
+      <div id="editor" hidden></div>
+      <div id="extras"></div>
+
+      <div class="actions">
+        <button id="submit">Looks right, submit</button>
+        <button id="fix" class="secondary">Something's off</button>
+      </div>
+      <div class="error" id="submitError"></div>
+    </div>
+  </section>
+
+  <section id="thanks" hidden>
+    <div class="card done-card">
+      <div class="big-icon">🎉</div>
+      <h1 style="font-size:32px">Thanks, <span id="thanksName"></span>!</h1>
+      <p class="muted" style="max-width:460px;margin:0 auto">You're in, and you can close this page. <b>Nothing to save:</b> this device remembers you. To change your answer later, or if the organizer says Gather has a question for you, just open the group link again.</p>
+      <div class="actions" style="justify-content:center">
+        <a class="btn" id="openMine" href="#">See my answer</a>
+        <a class="btn secondary" href="/me">My Gather</a>
+      </div>
+      <details>
+        <summary>Replying from another phone or computer later?</summary>
+        <p class="small muted" style="margin:10px 0 8px">This device remembers you, but another one won't. Keep this private link if you want to change your answer from somewhere else. Don't share it: anyone with it can change your answer.</p>
+        <div class="linkbox">
+          <input id="myLink" readonly aria-label="Your private link" />
+          <button id="copyMyLink" class="secondary">Copy</button>
+        </div>
+      </details>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import { api, esc, fmtDate, fmtTime, fmtRange, fmtDuration, showDemoBanner, icons, avatar, topbar, myGatherLink, copyButton, toMin, eventDates, metaHtml, timelineHtml, legendHtml, extrasHtml, decidedHtml, mountAvailabilityEditor } from "/common.js";
+  const $ = (id) => document.getElementById(id);
+
+  const showTopbar = () => ($("topbar").innerHTML = topbar(myGatherLink()));
+  showTopbar();
+  showDemoBanner($("banner"));
+  $("send").innerHTML = icons.send;
+  $("icConfirm").innerHTML = icons.check;
+  $("eyebrow").innerHTML = `${icons.message} You're invited`;
+  $("legend").innerHTML = legendHtml;
+
+  const eventId = location.pathname.split("/")[2];
+  let event;
+  let transcript = [];
+  let parsed = null;
+  let greeting = "";
+
+  const storageKey = `gather-name-${eventId}`;
+  const tokenKey = `gather-token-${eventId}`;
+  const store = {
+    get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+  };
+  $("name").value = store.get(storageKey);
+  let token = store.get(tokenKey);
+  const myPath = () => `/e/${eventId}/me/${token}`;
+  copyButton($("copyMyLink"), () => $("myLink").value, "Your private link is copied");
+
+  const dates = () => eventDates(event);
+
+  // Replied before on this device? Point them to their private page instead of starting over.
+  async function showWelcomeBack() {
+    if (!token) return false;
+    const mine = await api(`/api/events/${eventId}/me/${token}`).catch(() => null);
+    if (!mine) { token = ""; return false; }
+    const asked = mine.me.negotiation?.status === "asked";
+    $("welcome").innerHTML = `<div class="card welcome-back ${asked ? "has-question" : ""}" style="margin-top:24px">
+      ${avatar(mine.me.name)}
+      <div style="flex:1;min-width:200px">
+        <b>Welcome back, ${esc(mine.me.name)}.</b>
+        <div class="small muted">${asked ? "Gather has a question for you on your private page." : "You've already replied. You can see and update your answer on your private page."}</div>
+      </div>
+      <a class="btn" href="${esc(myPath())}">${asked ? "See the question" : "Open my page"}</a>
+    </div>`;
+    return true;
+  }
+
+  try {
+    event = await api(`/api/events/${eventId}`);
+    document.title = `${event.title} · Gather`;
+    $("title").textContent = event.title;
+    $("desc").textContent = event.description || "";
+    $("meta").innerHTML = metaHtml(event);
+
+    const asks = event.askAbout ? ` Also tell me about: ${event.askAbout.toLowerCase()}.` : "";
+    greeting = `Hi! When are you free between ${fmtDate(event.dateStart, { weekday: "short", month: "short", day: "numeric" })} and ${fmtDate(event.dateEnd)}? The event runs ${fmtDuration(event.durationMinutes)}, sometime ${fmtRange(event.dayStart, event.dayEnd)}.${asks}`;
+
+    const [d1, d2] = dates();
+    const wd = (d) => fmtDate(d, { weekday: "long" });
+    const examples = [
+      `${wd(d1)} works, ${wd(d2 || d1)} only after ${fmtTime(`${String(Math.floor((toMin(event.dayStart) + toMin(event.dayEnd)) / 120)).padStart(2, "0")}:00`)}`,
+      "Free any day except " + wd(d2 || d1),
+      "I'd love sushi, nothing too pricey",
+      "Allergic to peanuts",
+    ];
+    $("suggestionChips").innerHTML = examples.map((t) => `<button type="button" class="chip">${esc(t)}</button>`).join("");
+    $("intro").hidden = false;
+    if (event.decided) {
+      $("decided").innerHTML = decidedHtml(event);
+      await showWelcomeBack();
+    } else {
+      const back = await showWelcomeBack();
+      $("compose").hidden = back;
+      if (back) $("welcome").insertAdjacentHTML("beforeend", `<p class="small muted" style="text-align:center;margin:10px 0 0">Not ${esc($("name").value || "you")}? <a href="#" id="notMe">Reply as someone else</a></p>`);
+      $("notMe")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        token = "";
+        $("name").value = "";
+        $("welcome").innerHTML = "";
+        $("compose").hidden = false;
+        $("name").focus();
+      });
+      renderChat(false);
+    }
+  } catch (err) {
+    $("loadError").textContent = err.message;
+  }
+
+  $("suggestionChips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    const box = $("message");
+    box.value = box.value.trim() ? `${box.value.trim().replace(/[.。]$/, "")}. ${chip.textContent}` : chip.textContent;
+    box.focus();
+  });
+
+  function renderChat(typing) {
+    const name = $("name").value.trim() || "You";
+    const aiMsg = (text) => `<div class="msg ai"><span class="avatar ai">${icons.sparkle}</span><div class="bubble">${text}</div></div>`;
+    $("chat").innerHTML =
+      aiMsg(esc(greeting)) +
+      transcript.map((t) => t.role === "participant"
+        ? `<div class="msg me">${avatar(name)}<div class="bubble">${esc(t.text)}</div></div>`
+        : aiMsg(esc(t.text))).join("") +
+      (typing ? aiMsg(`<span class="typing-dots"><i></i><i></i><i></i></span>`) : "");
+    $("suggestions").hidden = transcript.length > 0;
+  }
+
+  function renderConfirm() {
+    $("summary").textContent = parsed.summary;
+    $("timeline").innerHTML = timelineHtml(event, parsed.availability);
+    $("timesView").hidden = false;
+    $("editor").hidden = true;
+    $("editTimes").hidden = false;
+    $("extras").innerHTML = extrasHtml(parsed);
+    $("confirm").hidden = false;
+  }
+
+  $("send").addEventListener("click", async () => {
+    const text = $("message").value.trim();
+    $("error").textContent = "";
+    if (!$("name").value.trim()) { $("error").textContent = "Add your name first so the organizer knows who you are."; $("name").focus(); return; }
+    if (!text) { $("message").focus(); return; }
+    transcript.push({ role: "participant", text });
+    $("message").value = "";
+    $("confirm").hidden = true;
+    $("send").disabled = true;
+    renderChat(true);
+    try {
+      const res = await api(`/api/events/${eventId}/parse`, { method: "POST", body: { transcript } });
+      parsed = res.parsed;
+      if (parsed.status === "need_clarification" && parsed.question) {
+        transcript.push({ role: "assistant", text: parsed.question });
+        renderChat(false);
+        $("message").focus();
+      } else {
+        renderChat(false);
+        renderConfirm();
+        $("confirm").scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } catch (err) {
+      transcript.pop();
+      $("message").value = text;
+      renderChat(false);
+      $("error").textContent = err.message;
+    } finally {
+      $("send").disabled = false;
+    }
+  });
+
+  $("message").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("send").click(); }
+  });
+  $("name").addEventListener("input", () => renderChat(false));
+
+  // Adjust times by hand: edits go straight into what gets submitted.
+  $("editTimes").addEventListener("click", () => {
+    mountAvailabilityEditor($("editor"), event, parsed.availability, (availability) => (parsed.availability = availability));
+    $("timesView").hidden = true;
+    $("editor").hidden = false;
+    $("editTimes").hidden = true;
+  });
+
+  $("fix").addEventListener("click", () => {
+    $("confirm").hidden = true;
+    $("message").placeholder = "What should I change? e.g. Actually Friday is better, and I can stay until 10.";
+    $("message").focus();
+    $("compose").scrollIntoView({ behavior: "smooth", block: "end" });
+  });
+
+  $("submit").addEventListener("click", async () => {
+    $("submitError").textContent = "";
+    $("submit").disabled = true;
+    const name = $("name").value.trim();
+    try {
+      const saved = await api(`/api/events/${eventId}/responses`, { method: "POST", body: { name, parsed, transcript, token } });
+      token = saved.token;
+      store.set(storageKey, name);
+      store.set(tokenKey, token);
+      $("thanksName").textContent = name;
+      $("myLink").value = `${location.origin}${myPath()}`;
+      $("openMine").href = myPath();
+      showTopbar();
+      $("compose").hidden = true;
+      $("confirm").hidden = true;
+      $("thanks").hidden = false;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (err) {
+      $("submitError").textContent = err.message;
+    } finally {
+      $("submit").disabled = false;
+    }
+  });
+
+</script>
+</body>
+</html>

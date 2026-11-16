@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gather: organizer dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar"></div>
+<main class="wide">
+  <div id="banner"></div>
+  <div class="error" id="loadError"></div>
+
+  <section id="app" hidden>
+    <div class="event-head" style="padding-top:8px">
+      <span class="eyebrow" id="eyebrow"></span>
+      <h1 id="title"></h1>
+      <div class="meta-row" id="meta"></div>
+    </div>
+
+    <div class="share-strip" style="margin-top:22px">
+      <span class="label" id="shareLabel"></span>
+      <input id="shareLink" readonly aria-label="Participant link" />
+      <button id="copyShare" class="secondary">Copy link</button>
+      <button id="refresh" class="ghost" title="Refresh responses"></button>
+      <button id="simulate" class="ghost" title="Add replies from made-up participants to try things out">🧪 Add 5 test replies</button>
+    </div>
+
+    <div id="decided" style="margin-top:18px"></div>
+    <div class="stats" id="stats"></div>
+
+    <div class="card plan-card">
+      <div class="card-head">
+        <div class="section-title"><span class="icon-badge violet" id="icPlan"></span><div><h2>AI plan</h2><p class="small muted">Picks from the best-attended slots and fills in details from what people asked for.</p></div></div>
+        <button id="recommend"></button>
+      </div>
+      <div class="error" id="recError"></div>
+      <div id="rec"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><div class="section-title"><span class="icon-badge" id="icSlots"></span><div><h2>Best time slots</h2><p class="small muted">Most people first, then strongest preference.</p></div></div></div>
+        <div id="candidates"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="section-title"><span class="icon-badge green" id="icHeat"></span><div><h2>Who's free when</h2><p class="small muted">Each cell is 30 minutes. Hover to see names.</p></div></div></div>
+        <div class="heat-wrap" id="heatmap"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="section-title"><span class="icon-badge violet" id="icPeople"></span><h2>Responses <span class="muted" id="count" style="font-family:var(--font);font-size:16px;font-weight:500"></span></h2></div></div>
+      <div id="responses"></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import { api, esc, fmtDate, fmtTime, fmtRange, fmtDuration, showDemoBanner, copyButton, icons, avatar, topbar, toast, LEVEL_LABEL, decidedHtml } from "/common.js";
+  const $ = (id) => document.getElementById(id);
+
+  $("topbar").innerHTML = topbar(`<span class="tag">Organizer view</span>`);
+  showDemoBanner($("banner"));
+  $("eyebrow").innerHTML = `${icons.grid} Organizer dashboard`;
+  $("shareLabel").innerHTML = `${icons.link.replace("<svg", '<svg width="16" height="16" style="vertical-align:-3px;margin-right:6px"')}Share with the group`;
+  $("refresh").innerHTML = icons.refresh;
+  $("icPlan").innerHTML = icons.sparkle;
+  $("icSlots").innerHTML = icons.trophy;
+  $("icHeat").innerHTML = icons.grid;
+  $("icPeople").innerHTML = icons.users;
+
+  const eventId = location.pathname.split("/")[2];
+  const key = new URLSearchParams(location.search).get("key") || "";
+  const base = `/api/events/${eventId}`;
+  $("shareLink").value = `${location.origin}/e/${eventId}`;
+  copyButton($("copyShare"), () => $("shareLink").value, "Participant link copied");
+
+  let total = 0;
+  let decided = null;
+  let pending = 0;
+  const when = (s) => `${fmtDate(s.date)} · ${fmtRange(s.start, s.end)}`;
+  const setRecButton = (hasPlan) => ($("recommend").innerHTML = `${hasPlan ? icons.refresh : icons.sparkle}${hasPlan ? "Regenerate" : "Generate plan"}`);
+
+  function attendance(slot) {
+    const pct = total ? Math.round((slot.attendees.length / total) * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:10px">
+      <div class="avatars">${slot.attendees.map((a) => avatar(a.name, "sm")).join("")}${slot.missing.map((n) => avatar(n, "sm out")).join("")}</div>
+      <span class="count">${slot.attendees.length}/${total}</span>
+    </div>
+    <div class="attend-bar"><i style="width:${pct}%"></i></div>`;
+  }
+
+  function renderStats(candidates, responses, rec) {
+    const best = candidates[0];
+    const hardCount = responses.reduce((n, r) => n + r.parsed.hard_constraints.length, 0);
+    const prefCounts = {};
+    for (const r of responses) for (const p of r.parsed.preferences) prefCounts[p.value.toLowerCase()] = (prefCounts[p.value.toLowerCase()] || 0) + 1;
+    const topPref = Object.entries(prefCounts).sort((a, b) => b[1] - a[1])[0];
+    $("stats").innerHTML = `
+      <div class="stat"><div class="k">Responses</div><div class="v">${total}</div>
+        <div class="sub">${total ? `<div class="avatars" style="margin-top:6px">${responses.slice(0, 8).map((r) => avatar(r.name, "sm")).join("")}</div>` : "Waiting for the first reply"}</div></div>
+      <div class="stat"><div class="k">Best time so far</div>
+        ${best ? `<div class="v">${esc(fmtDate(best.date, { weekday: "short" }))} <small>${esc(fmtDate(best.date, { month: "short", day: "numeric" }))}, ${esc(fmtRange(best.start, best.end))}</small></div>
+        <div class="sub">${best.attendees.length} of ${total} can come${best.missing.length ? ` · missing ${esc(best.missing.join(", "))}` : " · everyone!"}</div>` : `<div class="v">—</div><div class="sub">Needs responses</div>`}</div>
+      <div class="stat"><div class="k">Constraints & wishes</div>
+        <div class="v">${hardCount} <small>must-respect</small></div>
+        <div class="sub">${topPref ? `Most asked for: <b>${esc(topPref[0])}</b> (${topPref[1]})` : "No preferences yet"}</div></div>`;
+  }
+
+  // Copyable text the organizer can send someone privately (e.g. on WhatsApp) so they know
+  // Gather is waiting on them.
+  const nudge = (name, path) => `Hi ${name.split(" ")[0]}, Gather has a quick question for you about "${$("title").textContent}". You can answer here: ${location.origin}${path}`;
+
+  // Follow-ups with people who can't make the top pick. Web participants get the question on
+  // their private page; test participants answer right away.
+  function negotiationHtml(rec, neg) {
+    if (!neg || (!neg.askable.length && !neg.log.length)) return "";
+    const answeredSincePlan = neg.log.some((n) => n.status !== "asked" && (n.answeredAt || n.at) > rec.generatedAt);
+    const STATUS = {
+      asked: `<span class="status-pill">Waiting for their answer</span>`,
+      yes: `<span class="count">Can make it now</span>`,
+      no: `<span class="count no">Can't make it</span>`,
+      replied: `<span class="count no">Updated, still can't</span>`,
+    };
+    const log = neg.log.map((n) => {
+      const status = n.kind === "web" ? n.status : n.fits ? "yes" : "replied";
+      return `
+      <div class="followup">
+        ${avatar(n.name, "sm")}
+        <div style="flex:1;min-width:0">
+          <div class="who"><b>${esc(n.name)}</b> ${n.kind === "web" ? "" : `<span class="small muted">test participant</span>`} ${STATUS[status]}
+            ${n.kind === "web" && status === "asked" ? `<button class="ghost mini-btn" data-nudge="${esc(n.name)}" data-path="${esc(n.personalPath)}">${icons.copy.replace("<svg", '<svg width="13" height="13"')} Copy a reminder to send them</button>` : ""}
+          </div>
+          <div class="q">Gather asked: <i>${esc(n.question)}</i></div>
+          ${n.answer ? `<div class="a">${esc(n.answer)}</div>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+    const webAskable = neg.askable.filter((a) => a.web).length;
+    return `<div class="followups">
+      <div class="card-head" style="margin-bottom:8px">
+        <h3 style="margin:0">🤝 Following up with people who can't make it</h3>
+        ${neg.askable.length && !decided ? `<button class="secondary" id="negotiate">Ask ${neg.askable.length === 1 ? esc(neg.askable[0].name) : `${neg.askable.length} people`}</button>` : ""}
+      </div>
+      ${neg.askable.length && !decided ? `<p class="small muted" style="margin:0 0 4px">${neg.askable.map((a) => esc(a.name)).join(", ")} can't make the top pick. Gather can privately ask whether they could adjust.${webAskable ? " The question appears on each person's private page, and they can answer with one tap or in their own words." : ""}</p>` : ""}
+      ${log}
+      ${answeredSincePlan ? `<p class="small muted" style="margin:8px 0 0">New answers came in. Regenerate the plan to include them.</p>` : ""}
+    </div>`;
+  }
+
+  function renderRecommendation(rec, neg) {
+    setRecButton(!!rec);
+    if (!rec) {
+      $("rec").innerHTML = `<div class="plan-empty"><div class="big-icon">${icons.sparkle}</div>
+        ${total ? `<b>${total} response${total === 1 ? "" : "s"} in.</b> Generate a plan whenever you're ready. You can regenerate as more people reply.` : "Once a few people have replied, generate a plan here."}</div>`;
+      return;
+    }
+    const proposals = rec.proposals.map((p, i) => `
+      <div class="proposal ${i === 0 ? "best" : ""} ${decided && decided.index === i ? "chosen" : ""}">
+        <span class="rank">${i === 0 ? `${icons.trophy.replace("<svg", '<svg width="14" height="14"')} Recommended` : `Option ${i + 1}`}</span>
+        <div class="title">${esc(p.title)}</div>
+        <div class="when">${icons.calendar}${esc(when(p.slot))}</div>
+        ${attendance(p.slot)}
+        <dl>
+          <div><dt>Why</dt><dd>${esc(p.why)}</dd></div>
+          <div><dt>Trade-offs</dt><dd>${esc(p.tradeoffs)}</dd></div>
+          <div><dt>Details</dt><dd>${esc(p.details)}</dd></div>
+        </dl>
+        ${decided ? "" : `<button class="${i === 0 ? "" : "secondary"} mini-btn" data-announce="${i}" style="margin-top:10px">📣 Pick this one</button>`}
+      </div>`).join("");
+    $("rec").innerHTML = `
+      <div class="summary-box">${esc(rec.group_summary)}</div>
+      ${rec.must_respect.length ? `<div class="must">${rec.must_respect.map((m) => `<span class="chip static red">${icons.alert.replace("<svg", '<svg width="14" height="14"')}${esc(m)}</span>`).join("")}</div>` : ""}
+      <div class="proposals">${proposals}</div>
+      ${negotiationHtml(rec, neg)}
+      ${rec.announcement || decided ? `<div class="announce-box">
+        <h3 style="margin:0">Message for the group chat</h3>
+        <pre>${esc(decided?.message || rec.announcement)}</pre>
+        <button class="secondary" id="copyAnnounce">${icons.copy}Copy message</button>
+      </div>` : ""}
+      <div class="generated">Generated ${esc(new Date(rec.generatedAt).toLocaleString())}${rec.responseCount !== undefined && rec.responseCount !== total ? " · new responses since then, regenerate to include them" : ""}</div>`;
+    if ($("copyAnnounce")) copyButton($("copyAnnounce"), () => decided?.message || rec.announcement, "Message copied");
+    $("rec").querySelectorAll("[data-nudge]").forEach((b) => copyButton(b, () => nudge(b.dataset.nudge, b.dataset.path), "Reminder copied. Paste it in a private chat."));
+    $("rec").querySelectorAll("[data-announce]").forEach((b) => b.addEventListener("click", async () => {
+      const p = rec.proposals[Number(b.dataset.announce)];
+      if (!confirm(`Pick "${p.title}" (${when(p.slot)})? Replies will close, and everyone's page will show this as the final plan.`)) return;
+      try {
+        await api(`${base}/announce?key=${encodeURIComponent(key)}`, { method: "POST", body: { index: Number(b.dataset.announce) } });
+        await load();
+        toast("Decided! Copy the message below to share it with the group.");
+      } catch (err) { toast(err.message); }
+    }));
+    if ($("negotiate")) $("negotiate").addEventListener("click", async () => {
+      const btn = $("negotiate");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner"></span>Asking…`;
+      try {
+        const { results } = await api(`${base}/negotiate?key=${encodeURIComponent(key)}`, { method: "POST" });
+        await load();
+        const sims = results.filter((r) => r.status === "answered");
+        const web = results.length - sims.length;
+        toast([web ? `Asked ${web} ${web === 1 ? "person" : "people"} on their private page` : "", sims.length ? `${sims.filter((r) => r.fits).length} of ${sims.length} test participants can make it` : ""].filter(Boolean).join(" · "));
+      } catch (err) {
+        toast(err.message);
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function renderHeatmap(heatmap) {
+    if (!heatmap.length) return;
+    const times = heatmap[0].cells.map((c) => c.time);
+    const head = `<tr><th></th>${times.map((t) => `<th>${t.endsWith(":00") ? esc(fmtTime(t)) : ""}</th>`).join("")}</tr>`;
+    const rows = heatmap.map((day) => `<tr><th>${esc(fmtDate(day.date))}</th>${day.cells.map((c) => {
+      const a = total ? c.count / total : 0;
+      const style = c.count ? `background: rgba(var(--heat-rgb), ${0.2 + 0.8 * a}); color: ${a < 0.5 ? "var(--accent-text)" : "#fff"}` : "";
+      const tip = `${fmtDate(day.date)} ${fmtTime(c.time)} · ${c.count}/${total}${c.people.length ? ": " + c.people.join(", ") : ""}`;
+      return `<td style="${style}" title="${esc(tip)}">${c.count || ""}</td>`;
+    }).join("")}</tr>`).join("");
+    $("heatmap").innerHTML = `<table class="heat"><thead>${head}</thead><tbody>${rows}</tbody></table>
+      <div class="heat-legend"><span>0</span><span class="ramp"></span><span>${total} ${total === 1 ? "person" : "people"}</span></div>`;
+  }
+
+  async function load() {
+    const { event, responses, heatmap, candidates, recommendation, negotiation, decided: d } = await api(`${base}/admin?key=${encodeURIComponent(key)}`);
+    total = responses.length;
+    decided = d;
+    pending = negotiation.log.filter((n) => n.status === "asked").length;
+    $("decided").innerHTML = decided ? decidedHtml({ decided }).replace("Replies are closed. See you there!", "Replies are closed. Everyone who opens the event link or their private page now sees this plan.") : "";
+    $("recommend").hidden = !!decided;
+    $("simulate").hidden = !!decided;
+    document.title = `${event.title} · organizer · Gather`;
+    $("title").textContent = event.title;
+    $("meta").innerHTML = [
+      [icons.calendar, `${fmtDate(event.dateStart)} – ${fmtDate(event.dateEnd)}`],
+      [icons.clock, fmtRange(event.dayStart, event.dayEnd)],
+      [icons.hourglass, fmtDuration(event.durationMinutes)],
+      ...(event.askAbout ? [[icons.message, `Asking about: ${event.askAbout}`]] : []),
+    ].map(([ic, t]) => `<span class="meta">${ic}${esc(t)}</span>`).join("");
+    $("count").textContent = `· ${total}`;
+
+    renderStats(candidates, responses, recommendation);
+
+    $("candidates").innerHTML = candidates.length
+      ? candidates.map((c, i) => `
+          <div class="slot">
+            <span class="n">${i + 1}</span>
+            <div class="body">
+              <div class="top"><span>${esc(when(c))}</span><span class="count">${c.attendees.length}/${total}</span></div>
+              <div class="people">${c.attendees.map((a) => `${esc(a.name)}${a.level !== "available" ? ` <span style="color:var(--faint)">(${LEVEL_LABEL[a.level].toLowerCase()})</span>` : ""}`).join(", ")}${c.missing.length ? ` · <span class="no">${c.missing.map(esc).join(", ")}</span>` : ""}</div>
+            </div>
+          </div>`).join("")
+      : `<div class="empty">No responses yet.</div>`;
+
+    renderHeatmap(heatmap);
+
+    $("responses").innerHTML = total
+      ? `<div class="people-grid">${responses.map((r) => `
+          <div class="person">
+            ${avatar(r.name)}
+            <div style="flex:1;min-width:0">
+              <div class="who"><b>${esc(r.name)}</b><span class="small muted">${esc(new Date(r.submittedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}</span>
+                ${r.waitingOnThem ? `<span class="status-pill">Gather is waiting on them</span>` : ""}
+                ${r.web ? `<button class="ghost mini-btn" data-link="${esc(r.personalPath)}" title="Their private page, where Gather follows up with them">${icons.link.replace("<svg", '<svg width="13" height="13"')} Private link</button>` : ""}
+              </div>
+              ${r.contact ? `<div class="contact">Reach them: ${esc(r.contact)}</div>` : ""}
+              <p class="said">${esc(r.parsed.summary)}</p>
+              <div class="chips">
+                ${r.parsed.hard_constraints.map((h) => `<span class="chip static red">${esc(h)}</span>`).join("")}
+                ${r.parsed.preferences.map((p) => `<span class="chip static violet">${esc(p.value)} <span class="strength">· ${esc(p.topic)}</span></span>`).join("")}
+                ${r.parsed.notes ? `<span class="chip static">📝 ${esc(r.parsed.notes)}</span>` : ""}
+              </div>
+            </div>
+          </div>`).join("")}</div>`
+      : `<div class="empty">Share the participant link to start collecting answers.</div>`;
+    $("responses").querySelectorAll("[data-link]").forEach((b) => copyButton(b, () => `${location.origin}${b.dataset.link}`, "Private link copied. Only send it to that person."));
+
+    renderRecommendation(recommendation, negotiation);
+    $("app").hidden = false;
+  }
+
+  $("recommend").addEventListener("click", async () => {
+    $("recError").textContent = "";
+    $("recommend").disabled = true;
+    $("recommend").innerHTML = `<span class="spinner"></span>Thinking…`;
+    try {
+      await api(`${base}/recommend?key=${encodeURIComponent(key)}`, { method: "POST" });
+      await load();
+      toast("Plan ready");
+    } catch (err) {
+      $("recError").textContent = err.message;
+      setRecButton(false);
+    } finally {
+      $("recommend").disabled = false;
+    }
+  });
+
+  $("simulate").addEventListener("click", async () => {
+    const btn = $("simulate");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>Adding test replies…`;
+    try {
+      const { added } = await api(`${base}/simulate?key=${encodeURIComponent(key)}`, { method: "POST", body: { count: 5 } });
+      await load();
+      toast(added.length ? `Added ${added.length} test replies` : "All test participants have already replied");
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🧪 Add 5 test replies";
+    }
+  });
+
+  $("refresh").addEventListener("click", () => load().then(() => toast("Up to date")).catch((err) => toast(err.message)));
+
+  load().catch((err) => ($("loadError").textContent = err.message));
+
+  // While Gather is waiting on someone, check for their answer now and then.
+  setInterval(() => { if (pending && !document.hidden) load().catch(() => {}); }, 20000);
+</script>
+</body>
+</html>

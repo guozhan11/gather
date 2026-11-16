@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>My Gather</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar"></div>
+<main>
+  <section class="event-head">
+    <span class="eyebrow" id="eyebrow"></span>
+    <h1>My Gather</h1>
+    <p class="event-desc">Every event you've replied to on this device. Open one to see or change your answer, or to answer a question from Gather.</p>
+  </section>
+  <div class="my-list" id="list"><div class="empty"><span class="spinner" style="display:inline-block"></span></div></div>
+  <p class="device-note">Saved in this browser on this device only. To see an event from another device, open its group link there.</p>
+</main>
+<script type="module">
+  import { api, esc, fmtDate, fmtRange, icons, topbar, myEvents, forgetEvent } from "/common.js";
+  const $ = (id) => document.getElementById(id);
+  $("topbar").innerHTML = topbar();
+  $("eyebrow").innerHTML = `${icons.users} Your events`;
+
+  const chevron = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+  const when = (s) => `${fmtDate(s.date, { weekday: "short", month: "short", day: "numeric" })}, ${fmtRange(s.start, s.end)}`;
+
+  // Fetch each remembered event; links that no longer work are forgotten quietly.
+  const items = (await Promise.all(myEvents().map(async ({ eventId, token }) => {
+    try {
+      const view = await api(`/api/events/${eventId}/me/${token}`);
+      return { eventId, token, ...view };
+    } catch (err) {
+      if (/doesn't match|not found/i.test(err.message)) forgetEvent(eventId);
+      return null;
+    }
+  }))).filter(Boolean);
+
+  const state = ({ event, me }) => event.decided ? "decided" : me.negotiation?.status === "asked" ? "question" : "open";
+  const order = { question: 0, open: 1, decided: 2 };
+  items.sort((a, b) => order[state(a)] - order[state(b)] || (b.event.dateStart > a.event.dateStart ? 1 : -1));
+
+  $("list").innerHTML = items.length ? items.map((item) => {
+    const { event, me, eventId, token } = item;
+    const s = state(item);
+    const status =
+      s === "question" ? `<span class="status-pill" style="background:var(--accent-soft);color:var(--accent-text)">Gather has a question for you</span>`
+      : s === "decided" ? `<span class="count">Decided: ${esc(when(event.decided.slot))}</span>`
+      : `<span class="count">Replied · waiting for the plan</span>`;
+    return `<a class="card my-item ${s === "question" ? "has-question" : ""}" href="/e/${encodeURIComponent(eventId)}/me/${encodeURIComponent(token)}">
+      <div class="body">
+        <h2>${esc(event.title)}</h2>
+        <div class="sub">${esc(`${fmtDate(event.dateStart)} – ${fmtDate(event.dateEnd)}`)} · replied as <b>${esc(me.name)}</b></div>
+        <div style="margin-top:8px">${status}</div>
+        ${s === "question" ? `<p class="said"><i>${esc(me.negotiation.question)}</i></p>` : me.parsed.summary ? `<p class="said">${esc(me.parsed.summary)}</p>` : ""}
+      </div>
+      <span class="go">${chevron}</span>
+    </a>`;
+  }).join("") : `<div class="card empty">
+      <div class="big-icon" style="margin-bottom:8px">${icons.calendar.replace("<svg", '<svg width="28" height="28"')}</div>
+      Nothing here yet. Open an event link from your group chat and reply; it will show up here.
+    </div>`;
+</script>
+</body>
+</html>

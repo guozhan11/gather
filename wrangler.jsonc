@@ -1,0 +1,45 @@
+// Cloudflare Workers config for Gather: the web version and the Slack app (see worker.js).
+// Deploy: npx wrangler deploy. The OpenAI key is a secret: npx wrangler secret put OPENAI_API_KEY
+// Slack (optional until set): npx wrangler secret put SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET,
+// and SLACK_CLIENT_ID under "vars" below. See docs/DEVELOPMENT.md, "Slack on Cloudflare".
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "gather",
+	"main": "./worker.js",
+	"compatibility_date": "2026-11-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": true,
+	"preview_urls": false,
+	"secrets": {
+		"required": ["OPENAI_API_KEY"]
+	},
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": ["/api/*", "/e/*", "/me", "/slack/*"]
+	},
+	"durable_objects": {
+		"bindings": [
+			{ "name": "EVENTS", "class_name": "EventStore" },
+			// One per Slack workspace that installs Gather.
+			{ "name": "WORKSPACES", "class_name": "Workspace" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["EventStore"] },
+		{ "tag": "v2", "new_sqlite_classes": ["Workspace"] }
+	],
+	// Every AI call costs money, so cap them: per visitor, and for the whole site.
+	"ratelimits": [
+		{ "name": "AI_RATE_LIMITER", "namespace_id": "2026111501", "simple": { "limit": 20, "period": 60 } },
+		{ "name": "AI_GLOBAL_RATE_LIMITER", "namespace_id": "2026111502", "simple": { "limit": 200, "period": 60 } }
+	],
+	"vars": {
+		"OPENAI_MODEL": "gpt-5.4-mini",
+		// From your Slack app's Basic Information page (not a secret).
+		"SLACK_CLIENT_ID": "12553843055265.12545742983571"
+	},
+	"observability": {
+		"enabled": true
+	}
+}

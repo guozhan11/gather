@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Three people around a clock; the orange slice is the time everyone agreed on. -->
+  <rect width="1024" height="1024" fill="#FFFFFF"/>
+  <g transform="translate(512 512) scale(1.18) translate(-512 -512)">
+    <circle cx="512" cy="512" r="250" fill="none" stroke="#2B2622" stroke-width="40"/>
+    <path d="M512 512 L512.0 342.0 A170 170 0 0 1 679.4 482.5 Z" fill="#E0603A"/>
+    <circle cx="512" cy="512" r="22" fill="#2B2622"/>
+    <circle cx="512.0" cy="262.0" r="50" fill="#E0603A" stroke="#FFFFFF" stroke-width="24" paint-order="stroke"/>
+    <circle cx="728.5" cy="637.0" r="50" fill="#E0603A" stroke="#FFFFFF" stroke-width="24" paint-order="stroke"/>
+    <circle cx="295.5" cy="637.0" r="50" fill="#E0603A" stroke="#FFFFFF" stroke-width="24" paint-order="stroke"/>
+  </g>
+</svg>

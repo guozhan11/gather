@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Gather: your private page</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar"></div>
+<main>
+  <div id="banner"></div>
+  <div class="error" id="loadError"></div>
+
+  <section id="intro" class="event-head" hidden>
+    <span class="eyebrow" id="eyebrow"></span>
+    <h1 id="title"></h1>
+    <div class="meta-row" id="meta"></div>
+  </section>
+
+  <div id="decided" style="margin-top:22px"></div>
+
+  <section id="app" hidden style="margin-top:22px">
+    <div class="private-strip">
+      <span class="lock" id="icLock"></span>
+      <div style="flex:1 1 220px;min-width:0">
+        <b>Only you can see this page.</b>
+        <div class="small muted">It works like a private chat with Gather. No need to save it: open the group link again, or My Gather, and this device brings you back here. If Gather needs to check something with you, the question shows up here.</div>
+      </div>
+      <button id="copyMine" class="secondary" title="Only needed to open this page on another device">Copy link for another device</button>
+    </div>
+
+    <div id="ask"></div>
+
+    <div class="card chat-card" style="margin-top:18px">
+      <div class="name-row"><span class="small muted">Your conversation with Gather</span></div>
+      <div class="chat" id="chat" aria-live="polite"></div>
+      <div class="composer" id="composer">
+        <div class="composer-box">
+          <textarea id="message" aria-label="Message Gather" placeholder="Plans changed? Just say so, e.g. Actually Friday is better, I can stay until 10."></textarea>
+          <button id="send" class="send-btn" aria-label="Send"></button>
+        </div>
+        <div class="hint"><span>Gather updates your answer from what you write here.</span><span class="kbd-hint"><kbd>⌘</kbd> + <kbd>Enter</kbd> to send</span></div>
+        <div class="error" id="error"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <div class="section-title"><span class="icon-badge" id="icFile"></span><div><h2>What the organizer sees</h2><p class="small muted" id="savedAt"></p></div></div>
+      <p class="quote" id="summary"></p>
+      <div class="card-head" style="margin:0 0 10px">
+        <h3 style="margin:0">When you can come</h3>
+        <button id="editTimes" class="secondary mini-btn">Adjust times</button>
+      </div>
+      <div id="timesView">
+        <div class="timeline" id="timeline"></div>
+        <div id="legend"></div>
+      </div>
+      <div id="timesEdit" hidden>
+        <div id="editor"></div>
+        <div class="edit-bar">
+          <button id="saveTimes">Save times</button>
+          <button id="cancelTimes" class="secondary">Cancel</button>
+        </div>
+      </div>
+      <div id="extras"></div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <label for="contact" style="margin-top:0">How can the organizer reach you? <span class="muted" style="font-weight:400">(optional)</span></label>
+      <div class="linkbox">
+        <input id="contact" maxlength="120" placeholder="WhatsApp, email, or phone" />
+        <button id="saveContact" class="secondary">Save</button>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Only the organizer sees this. They can use it to let you know when Gather has a question for you.</p>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import { api, esc, fmtDate, fmtRange, showDemoBanner, icons, avatar, topbar, myGatherLink, toast, copyButton, metaHtml, timelineHtml, legendHtml, extrasHtml, decidedHtml, mountAvailabilityEditor } from "/common.js";
+  const $ = (id) => document.getElementById(id);
+
+  // (topbar is drawn after this page saves its token, so the My Gather count includes it)
+  showDemoBanner($("banner"));
+  $("send").innerHTML = icons.send;
+  $("icFile").innerHTML = icons.check;
+  $("editTimes").innerHTML = `${icons.edit.replace("<svg", '<svg width="14" height="14"')} Adjust times`;
+  $("icLock").innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`;
+  $("legend").innerHTML = legendHtml;
+
+  const [, , eventId, , token] = location.pathname.split("/");
+  const base = `/api/events/${eventId}/me/${token}`;
+  copyButton($("copyMine"), () => location.href, "Your private link is copied");
+  try { localStorage.setItem(`gather-token-${eventId}`, token); } catch {}
+  $("topbar").innerHTML = topbar(`<div class="topbar-right"><span class="tag">Private</span>${myGatherLink()}</div>`);
+
+  let state = null;
+  let busy = false;
+  let editor = null; // set while the person is adjusting their times by hand
+  let lastThreadLength = -1;
+
+  const when = (s) => `${fmtDate(s.date, { weekday: "long", month: "short", day: "numeric" })} · ${fmtRange(s.start, s.end)}`;
+
+  function render(typing = false) {
+    const { event, me } = state;
+    document.title = `${event.title} · your page · Gather`;
+    $("eyebrow").innerHTML = `${icons.message} Hi ${esc(me.name)}`;
+    $("title").textContent = event.title;
+    $("meta").innerHTML = metaHtml(event);
+    $("intro").hidden = false;
+    $("decided").innerHTML = event.decided ? decidedHtml(event) : "";
+
+    const nego = me.negotiation;
+    $("ask").innerHTML = nego?.status === "asked" && !event.decided ? `
+      <div class="card ask-card">
+        <div class="section-title"><span class="avatar ai">${icons.sparkle}</span><div><h2>Gather has a question for you</h2><p class="small muted">About ${esc(when(nego.slot))}</p></div></div>
+        <p class="ask-q">${esc(nego.question)}</p>
+        <div class="actions">
+          <button id="yes">${icons.check}Yes, I can make it</button>
+          <button id="no" class="secondary">No, sorry</button>
+        </div>
+        <p class="small muted" style="margin:10px 0 0">No pressure, saying no is completely fine. You can also answer in your own words below, e.g. "I could come but I'd have to leave at 9."</p>
+      </div>` : "";
+    if ($("yes")) {
+      $("yes").addEventListener("click", () => answer(true));
+      $("no").addEventListener("click", () => answer(false));
+    }
+
+    const aiMsg = (text, cls = "") => `<div class="msg ai ${cls}"><span class="avatar ai">${icons.sparkle}</span><div class="bubble">${text}</div></div>`;
+    $("chat").innerHTML = me.thread.map((t) => {
+      if (t.kind === "note") return `<div class="chat-note">${icons.check.replace("<svg", '<svg width="13" height="13"')}${esc(t.text)}</div>`;
+      if (t.role === "participant") return `<div class="msg me">${avatar(me.name)}<div class="bubble">${esc(t.text)}</div></div>`;
+      return aiMsg(esc(t.text), t.kind === "negotiation" ? "highlight" : "");
+    }).join("") + (typing ? aiMsg(`<span class="typing-dots"><i></i><i></i><i></i></span>`) : "");
+    $("composer").hidden = !!event.decided;
+
+    $("summary").textContent = me.parsed.summary;
+    $("savedAt").textContent = me.parsed.timesEditedAt ? `Times adjusted by hand ${new Date(me.parsed.timesEditedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}. The bars are what counts.` : "";
+    $("editTimes").hidden = !!event.decided || !!editor;
+    if (!editor) {
+      $("timeline").innerHTML = timelineHtml(event, me.parsed.availability);
+      $("timesView").hidden = false;
+      $("timesEdit").hidden = true;
+    }
+    $("extras").innerHTML = extrasHtml(me.parsed);
+    if (document.activeElement !== $("contact")) $("contact").value = me.contact;
+    $("app").hidden = false;
+
+    // New message from Gather since last time? Bring it into view.
+    if (lastThreadLength !== -1 && me.thread.length > lastThreadLength && nego?.status === "asked") $("ask").scrollIntoView({ behavior: "smooth", block: "center" });
+    lastThreadLength = me.thread.length;
+  }
+
+  async function load() {
+    state = await api(base);
+    render();
+  }
+
+  async function answer(yes) {
+    if (busy) return;
+    busy = true;
+    $("yes").disabled = $("no").disabled = true;
+    try {
+      state = await api(`${base}/answer`, { method: "POST", body: { yes } });
+      render();
+      toast(yes ? "Thanks! The organizer will see this." : "Got it, thanks for letting them know.");
+    } catch (err) {
+      toast(err.message);
+      $("yes").disabled = $("no").disabled = false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  $("send").addEventListener("click", async () => {
+    const text = $("message").value.trim();
+    $("error").textContent = "";
+    if (!text || busy) return $("message").focus();
+    busy = true;
+    $("send").disabled = true;
+    state.me.thread.push({ role: "participant", text });
+    $("message").value = "";
+    render(true);
+    try {
+      const res = await api(`${base}/message`, { method: "POST", body: { text } });
+      state = res;
+      render();
+      if (res.kind === "updated") toast("Answer updated");
+      else $("message").focus();
+    } catch (err) {
+      state.me.thread.pop();
+      $("message").value = text;
+      render();
+      $("error").textContent = err.message;
+    } finally {
+      busy = false;
+      $("send").disabled = false;
+    }
+  });
+  $("message").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("send").click(); }
+  });
+
+  // ----- adjusting times by hand -----
+  $("editTimes").addEventListener("click", () => {
+    editor = mountAvailabilityEditor($("editor"), state.event, state.me.parsed.availability);
+    $("timesView").hidden = true;
+    $("timesEdit").hidden = false;
+    $("editTimes").hidden = true;
+  });
+  $("cancelTimes").addEventListener("click", () => {
+    editor = null;
+    render();
+  });
+  $("saveTimes").addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    $("saveTimes").disabled = true;
+    try {
+      state = await api(`${base}/availability`, { method: "POST", body: { availability: editor.get() } });
+      editor = null;
+      render();
+      toast("Times saved. The organizer sees the new times.");
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      busy = false;
+      $("saveTimes").disabled = false;
+    }
+  });
+
+  $("saveContact").addEventListener("click", async () => {
+    try {
+      await api(`${base}/contact`, { method: "POST", body: { contact: $("contact").value.trim() } });
+      state.me.contact = $("contact").value.trim();
+      toast("Saved");
+    } catch (err) { toast(err.message); }
+  });
+
+  load().catch((err) => ($("loadError").textContent = err.message));
+
+  // Check for new questions from Gather while the page is open.
+  setInterval(() => {
+    if (document.hidden || busy || editor || !state || document.activeElement === $("message") && $("message").value) return;
+    api(base).then((s) => { if (JSON.stringify(s) !== JSON.stringify(state)) { state = s; render(); } }).catch(() => {});
+  }, 15000);
+</script>
+</body>
+</html>

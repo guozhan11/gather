@@ -1,0 +1,54 @@
+# The installable Gather app, served by the Cloudflare Worker (worker.js).
+# Open your app at https://api.slack.com/apps -> App Manifest, replace everything with this,
+# Save, then reinstall. To let other workspaces install it: Manage Distribution -> Activate
+# Public Distribution. If you deploy to a different address, replace the URLs below.
+# (For local development over Socket Mode, use slack-manifest.local.yml instead.)
+display_information:
+  name: Gather
+  description: Find a time that works. Reply in your own words; AI turns it into a plan.
+  background_color: "#ffffff"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true              # people can DM Gather
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Gather
+    always_online: true
+  slash_commands:
+    - command: /gather
+      url: https://gather.psc-docket-helper.workers.dev/slack/events
+      description: Plan a get-together in this channel
+      usage_hint: "[event name]"
+      should_escape: false
+oauth_config:
+  redirect_urls:
+    - https://gather.psc-docket-helper.workers.dev/slack/oauth_redirect
+  scopes:
+    bot:                    # keep in sync with BOT_SCOPES in lib/slack-http.js
+      - commands            # /gather
+      - chat:write          # post the event, follow-up questions and the plan
+      - channels:join       # join a public channel when /gather is used there
+      - channels:history    # read replies in event threads (public channels)
+      - groups:history      # read replies in event threads (private channels the bot was invited to)
+      - im:history          # read direct messages people send to Gather
+      - im:write            # DM people who can't make the top pick, and the organizer
+      - users:read          # show people's names and use the organizer's time zone
+      - reactions:write     # add a check mark to replies it has understood
+      - channels:read       # list channel members, to remind people who haven't replied
+      - groups:read         # same, in private channels Gather was invited to
+settings:
+  event_subscriptions:
+    request_url: https://gather.psc-docket-helper.workers.dev/slack/events
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - app_uninstalled
+      - tokens_revoked
+  interactivity:
+    is_enabled: true
+    request_url: https://gather.psc-docket-helper.workers.dev/slack/events
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
