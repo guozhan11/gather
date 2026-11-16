@@ -10,7 +10,7 @@
 // Socket Mode bot (lib/slack.js) through lib/slack-http.js.
 import { DurableObject } from "cloudflare:workers";
 import { handleApi, AI_ROUTES } from "./lib/api.js";
-import { withBackend, newId } from "./lib/store.js";
+import { withBackend, newId, STATE_KEY } from "./lib/store.js";
 import { registerSlackHandlers } from "./lib/slack.js";
 import { createSlackApp, slackClient, verifySlackRequest, parseSlackBody, teamOf, installUrl, exchangeCode, signState, checkState } from "./lib/slack-http.js";
 
@@ -63,14 +63,23 @@ export class Workspace extends DurableObject {
     sql.exec("CREATE TABLE IF NOT EXISTS install (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)");
     sql.exec("CREATE TABLE IF NOT EXISTS event (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
     sql.exec("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
+    sql.exec("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, data TEXT NOT NULL)");
     this.installation = sql.exec("SELECT data FROM install").toArray().map((r) => JSON.parse(r.data))[0] || null;
     const events = {};
     const users = {};
     for (const row of sql.exec("SELECT id, data FROM event")) events[row.id] = JSON.parse(row.data);
     for (const row of sql.exec("SELECT id, data FROM user")) users[row.id] = JSON.parse(row.data);
+    // Bot state that must outlive this object being unloaded (unposted DM drafts, etc.).
+    const state = {};
+    for (const row of sql.exec("SELECT key, data FROM state")) state[row.key] = JSON.parse(row.data);
     this.backend = {
-      db: { events, users },
+      db: { events, users, state },
       save(eventId) {
+        if (eventId === STATE_KEY) {
+          sql.exec("DELETE FROM state");
+          for (const [key, value] of Object.entries(state)) sql.exec("INSERT INTO state (key, data) VALUES (?, ?)", key, JSON.stringify(value));
+          return;
+        }
         if (eventId) {
           if (events[eventId]) sql.exec("INSERT OR REPLACE INTO event (id, data) VALUES (?, ?)", eventId, JSON.stringify(events[eventId]));
           return;
@@ -102,7 +111,13 @@ export class Workspace extends DurableObject {
     if (!this.installation) return { error: "not_installed" };
     this.baseUrl = this.env.PUBLIC_URL || baseUrl;
     const client = slackClient(this.installation.botToken, { apiUrl: this.env.SLACK_API_URL || undefined });
-    const context = { teamId: this.installation.teamId, botUserId: this.installation.botUserId };
+    const context = {
+      teamId: this.installation.teamId,
+      botUserId: this.installation.botUserId,
+      // What this workspace approved at install time, and where to approve anything newer.
+      scopes: this.installation.scopes ? this.installation.scopes.split(",") : [],
+      updateUrl: `${this.baseUrl}/slack/install`,
+    };
     const { ack, done } = withBackend(this.backend, () => this.slack.dispatch(payload, { client, context }));
     this.pending.set(id, done);
     return { response: await ack };

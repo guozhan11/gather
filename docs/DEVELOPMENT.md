@@ -125,6 +125,19 @@ npm run deploy
 
 **本地测试 Cloudflare 版本：** `npx wrangler dev` 时加上 `--var SLACK_API_URL:http://127.0.0.1:<端口>/api/`，就可以把 Slack API 指向一个假的本地服务器，完整测试安装、`/gather`、表单、回复和私聊，而不碰真实的 Slack。
 
+**加新权限（scope）时，已经安装的 workspace 怎么办：**
+
+Slack 不会把新权限自动推给已经装了 Gather 的 workspace，他们手里还是安装时同意的那一套权限。Gather 的处理方式：
+
+- 每个 workspace 安装时同意了哪些权限，都存在它的 Durable Object 里，并通过 `context.scopes` 传给机器人逻辑。
+- 新功能如果需要新权限，在功能开头调用 `updateNote(slackCtx, ["新权限"])`。缺这个权限时，Gather 会给用户一个"一键更新"链接（就是 `/slack/install`，重新授权只需几秒，活动数据都会保留），而不是报错。
+- 组织者每次发起活动时，如果这个 workspace 缺少 `BOT_SCOPES` 里的任何权限，提示里会顺带一句"有更新可用"。
+- 为了少让大家重新授权，已经提前申请了几个以后很可能用到、又不敏感的权限：群组私聊（mpim:*）、workspace 基本信息（team:read）、用户组（usergroups:read）。
+
+**加新权限的步骤：** ① 加到 `lib/slack-http.js` 的 `BOT_SCOPES` 和两个 manifest 文件里；② 在用到它的功能开头加 `updateNote(...)` 检查；③ 部署，再把 manifest 粘贴到 Slack 后台。
+
+**新增事件订阅（比如以后接收群组私聊消息 `message.mpim`）不需要重新安装：** 事件订阅是应用层面的设置，只要对应的权限已经授权，改完 manifest 就对所有 workspace 生效。
+
 **频道消息怎么处理（lib/slack.js 的 message 处理）：**
 - 活动帖子里的回复，以及挂在活动上的帖子里的回复：直接解析。
 - 频道里 @Gather 的消息：算作对这个频道最新一个未关闭活动的回复（14 天内创建的）。
@@ -132,7 +145,7 @@ npm run deploy
 
 **限制：**
 - Slack 的一次请求之后，后续工作最多再运行约 30 秒。加很多虚拟回复、一次问很多人这类操作通常够用；如果以后操作变得更重，可以改用 Cloudflare Queues。
-- 私聊里还没发布的草稿只存在内存里。Durable Object 闲置一段时间后会被回收，草稿就会丢失，这时需要重新说一遍。
+- 私聊里还没发布的草稿、"是哪个活动？"这类待回答的问题，都存在 workspace 自己的数据库里（`store.getState/setState`），Durable Object 被回收后也不会丢。两天没动的草稿会被清掉。
 
 ## 设计要点：LLM 做理解，代码做计算
 

@@ -611,3 +611,58 @@ test("only messages that sound like an answer get the 'count it?' prompt", async
   for (const no of ["Nice slides today, Sam!", "Did anyone see the game tonight?", "lol", "Thanks everyone 🙏", "今天的讲座很有意思"])
     assert.ok(!looksLikeReply(no), no);
 });
+
+// ---------- workspaces installed before new permissions were added ----------
+
+test("an older install is offered a one-click update, and features that need it explain why", async () => {
+  const { BOT_SCOPES } = await import("../lib/slack-http.js");
+  const old = { scopes: ["commands", "chat:write", "channels:join", "channels:history", "groups:history", "im:history", "im:write", "users:read", "reactions:write"], updateUrl: "https://gather.example/slack/install" };
+  const current = { scopes: [...BOT_SCOPES], updateUrl: old.updateUrl };
+  const s = fakeSlack();
+  const post = async (slackCtx, channel) => {
+    await s.handlers.view.gather_create({ ack: async () => {}, client: s.client, context: slackCtx, body: { user: { id: ORGANIZER } }, view: { private_metadata: JSON.stringify({ channel }), state: { values: modalValues() } } });
+    return s.take().find((c) => c.method === "chat.postEphemeral").args.text;
+  };
+
+  assert.match(await post(old, "C0UPD1"), /There's an update to Gather for this workspace: <https:\/\/gather\.example\/slack\/install\|update it>/);
+  assert.doesNotMatch(await post(current, "C0UPD2"), /update/i, "up-to-date workspaces aren't nagged");
+  assert.doesNotMatch(await post(undefined, "C0UPD3"), /update/i, "the local Socket Mode bot isn't nagged");
+
+  // Reminders need channels:read: explain and link instead of failing.
+  const event = Object.values(store.allEvents()).find((e) => e.slack?.channel === "C0UPD1");
+  let membersCalled = false;
+  s.client.conversations.members = async () => { membersCalled = true; return { members: [] }; };
+  await s.action("gather_more")({ ack: async () => {}, client: s.client, context: old, body: { user: { id: ORGANIZER } }, action: { selected_option: { value: `remind:${event.id}` } } });
+  const note = s.take().find((c) => c.method === "chat.postEphemeral");
+  assert.match(note.args.text, /needs to see who's in the channel/);
+  assert.match(note.args.text, /update Gather/);
+  assert.equal(membersCalled, false);
+});
+
+test("a DM draft survives the bot being restarted between messages", async () => {
+  const before = fakeSlack();
+  await dmFrom(before, "U0LIZ", "Plan a lab dinner next week, evenings, ask about food and budget");
+  const preview = before.take().find((c) => c.method === "chat.postMessage");
+  const menu = preview.args.blocks.find((b) => b.type === "actions");
+
+  // A brand-new instance with empty memory, like Cloudflare unloading and reloading the workspace.
+  const after = fakeSlack();
+  await after.action("gather_draft_channel")({
+    ack: async () => {}, client: after.client,
+    body: { user: { id: "U0LIZ" }, channel: { id: "D_U0LIZ" }, message: { ts: preview.args.ts || "1001.0" } },
+    action: { block_id: menu.block_id, selected_conversation: "C0DINNER" },
+  });
+  const updated = after.take().find((c) => c.method === "chat.update");
+  assert.doesNotMatch(JSON.stringify(updated.args), /expired/);
+  assert.match(JSON.stringify(updated.args.blocks), /C0DINNER/);
+
+  // Feedback after another restart still edits the same draft, and posting works.
+  const again = fakeSlack();
+  await dmFrom(again, "U0LIZ", "make it 3 hours");
+  const revised = again.take().filter((c) => c.method === "chat.postMessage").at(-1);
+  assert.match(JSON.stringify(revised.args.blocks), /3 hours/);
+  const post = revised.args.blocks.find((b) => b.type === "actions").elements.find((e) => e.action_id === "gather_draft_post");
+  const last = fakeSlack();
+  await last.action("gather_draft_post")({ ack: async () => {}, client: last.client, body: { user: { id: "U0LIZ" }, channel: { id: "D_U0LIZ" }, message: { ts: "x" }, trigger_id: "T" }, action: post });
+  assert.ok(last.take().some((c) => c.method === "chat.postMessage" && c.args.channel === "C0DINNER"));
+});

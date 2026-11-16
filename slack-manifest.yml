@@ -37,6 +37,12 @@ oauth_config:
       - reactions:write     # add a check mark to replies it has understood
       - channels:read       # list channel members, to remind people who haven't replied
       - groups:read         # same, in private channels Gather was invited to
+      # Requested ahead of time so these features won't need a reinstall later:
+      - mpim:read           # group DMs: see the ones Gather is added to
+      - mpim:history        # group DMs: read replies there
+      - mpim:write          # group DMs: post there
+      - team:read           # workspace name and icon
+      - usergroups:read     # remind a user group, e.g. @design-team
 settings:
   event_subscriptions:
     request_url: https://gather.psc-docket-helper.workers.dev/slack/events
